@@ -1,133 +1,109 @@
+import json
 from groq import Groq
 from models import WalletSignal, DebateResult
 from config import GROQ_API_KEY
-import json
 
+# Initialisation du client Groq
 client = Groq(api_key=GROQ_API_KEY)
 
-def call_llm(prompt, system=None):
-    messages = []
-    if system:
-        messages.append({"role": "system", "content": system})
-    messages.append({"role": "user", "content": prompt})
-    response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=messages,
-        temperature=0.7,
-        max_tokens=1000
-    )
-    return response.choices[0].message.content
+# --- CONFIGURATION DES AGENTS (PROMPTS) ---
 
-def parse_json(content):
+SYSTEM_ANALYST = """Tu es l'Analyste 'Insider' du Swarm Polymarket. 
+Ton rôle est de trouver des preuves qu'un mouvement de portefeuille est un signal d'achat intelligent (Smart Money).
+Concentre-toi sur : 
+1. La taille de la position.
+2. L'historique du wallet (Est-ce un habitué ou un nouveau compte suspect ?).
+3. La pertinence du pari par rapport à la thématique.
+RESTE STRICTEMENT CONCENTRÉ SUR LES DONNÉES FOURNIES. Ne parle pas d'autres sujets."""
+
+SYSTEM_CONTRADICTEUR = """Tu es l'Avocat du Diable (Le Contradicteur). 
+Ton unique but est de critiquer l'analyse de l'Analyste et de trouver des risques.
+Cherche :
+1. Les risques de manipulation (Wash Trading).
+2. Le manque de liquidité du marché.
+3. Les facteurs externes que l'analyste ignore (News, blessures, délais).
+Sois sceptique, pessimiste et direct. Ne sois jamais d'accord par défaut."""
+
+# --- FONCTIONS UTILITAIRES ---
+
+def call_llm(prompt, system_prompt):
+    """Appelle le LLM avec un système strict pour éviter les mélanges de thématiques."""
     try:
-        content = content.strip()
-        if "```" in content:
-            content = content.split("```")[1]
-            if content.startswith("json"):
-                content = content[4:]
-        return json.loads(content.strip())
-    except:
-        return {}
-
-def scout_node(market_title, market_slug, volume, implied_yes):
-    system = "Tu es le Market Scout du Swarm Polymarket. Tu analyses les marches et identifies les opportunites. Reponds uniquement en JSON valide."
-    prompt = f"""Analyse ce marche Polymarket :
-Titre : {market_title}
-Slug : {market_slug}
-Volume : {volume} USDC
-Probabilite implicite YES : {implied_yes}%
-
-Reponds en JSON :
-{{"priority": "HIGH|MEDIUM|LOW", "catalyst": "evenement cle identifie", "scout_signal": "raison en 1 phrase", "days_to_resolution_estimate": nombre}}"""
-    content = call_llm(prompt, system)
-    return parse_json(content)
-
-def news_node(market_title):
-    system = "Tu es le News & Sentiment Agent du Swarm Polymarket. Tu analyses le sentiment et les actualites. Reponds uniquement en JSON valide."
-    prompt = f"""Analyse le sentiment et les actualites pour ce marche Polymarket :
-Titre : {market_title}
-
-Reponds en JSON :
-{{"sentiment_score": nombre entre -100 et 100, "sentiment_label": "Positif|Negatif|Neutre", "key_facts": ["fait1", "fait2"], "imminent_catalyst": "evenement imminent ou null", "narrative_vs_market": "DECALAGE HAUSSIER|DECALAGE BAISSIER|ALIGNEMENT"}}"""
-    content = call_llm(prompt, system)
-    return parse_json(content)
-def analyst_node(state: WalletSignal):
-    prompt = f"""Tu es un ANALYSTE ON-CHAIN specialise Polymarket.
-Wallet: {state.wallet}
-Marche: {state.market_slug}
-Position: {state.position_size} USDC
-Age wallet: {state.age_days} jours
-
-Reponds en JSON :
-{{"score": nombre 0-100, "reasoning": "explication courte", "risk_factors": ["facteur1", "facteur2"]}}"""
-    try:
-        data = parse_json(call_llm(prompt))
-        state.breakdown["analyst"] = data
-        state.initial_score = data.get("score", 50)
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.2,  # Température basse pour éviter les hallucinations/mélanges
+            max_tokens=800
+        )
+        return response.choices[0].message.content
     except Exception as e:
-        state.breakdown["analyst"] = {"score": 50, "reasoning": "Erreur"}
-    return state
+        return f"Erreur agent : {str(e)}"
 
-def whale_node(state: WalletSignal):
-    prompt = f"""Tu es un EXPERT WHALE HUNTER specialise Polymarket.
-Wallet: {state.wallet}
-Marche: {state.market_slug}
-Position: {state.position_size} USDC
-Age wallet: {state.age_days} jours
+# --- NODES DU GRAPHE ---
 
-Reponds en JSON :
-{{"whale_score": nombre 0-100, "is_insider": true ou false, "explanation": "explication courte"}}"""
-    try:
-        data = parse_json(call_llm(prompt))
-        state.breakdown["whale"] = data
-    except:
-        state.breakdown["whale"] = {"whale_score": 50, "is_insider": False, "explanation": "Erreur"}
-    return state
+def analyst_node(signal: WalletSignal):
+    """Premier agent : Analyse le signal positivement."""
+    prompt = f"""Analyse ce signal On-Chain pour le marché '{signal.market_slug}' :
+    - Wallet: {signal.wallet}
+    - Taille Position: {signal.position_size} USDC
+    - Âge du compte: {signal.age_days} jours
+    - Thématique: {signal.thematique}
+    
+    Explique pourquoi c'est un signal intéressant."""
+    
+    reasoning = call_llm(prompt, SYSTEM_ANALYST)
+    signal.breakdown["analyst"] = {"reasoning": reasoning}
+    return signal
 
-def validator_node(market_title, scout_data, news_data, analyst_score, whale_score):
-    system = "Tu es le Strategist Validator du Swarm Polymarket. Tu synthetises les analyses et donnes une recommandation finale. Reponds uniquement en JSON valide."
-    prompt = f"""Synthetise ces analyses pour le marche : {market_title}
+def validator_node(state: WalletSignal):
+    """Deuxième agent : Contredit l'analyse et génère le résultat final."""
+    analyst_opinion = state.breakdown.get("analyst", {}).get("reasoning", "Pas d'analyse disponible.")
+    
+    prompt = f"""Voici l'analyse positive de mon collègue pour le marché '{state.market_slug}' :
+    ---
+    {analyst_opinion}
+    ---
+    Trouve les failles et les risques majeurs liés à ce pari et à ce wallet précis. 
+    Ne parle QUE de ce marché ({state.market_slug})."""
+    
+    critique = call_llm(prompt, SYSTEM_CONTRADICTEUR)
+    
+    # Calcul d'un score de confiance simplifié
+    confidence_score = 75
+    if "RISQUE ÉLEVÉ" in critique.upper() or "DANGER" in critique.upper():
+        confidence_score = 55
 
-Scout : {json.dumps(scout_data)}
-News & Sentiment : {json.dumps(news_data)}
-Score Analyste : {analyst_score}
-Score Whale : {whale_score}
-
-Calcule un score global 0-100 et une recommandation.
-Reponds en JSON :
-{{"global_score": nombre 0-100, "recommendation": "STRONG EDGE|MODERATE EDGE|MONITOR|AVOID", "thesis": "these en 2 phrases", "risk": "risque principal en 1 phrase"}}"""
-    content = call_llm(prompt, system)
-    return parse_json(content)
-
-def final_decision(state: WalletSignal, validator_data=None):
-    analyst_score = state.breakdown.get("analyst", {}).get("score", 50)
-    whale_score = state.breakdown.get("whale", {}).get("whale_score", 50)
-    global_score = validator_data.get("global_score", (analyst_score + whale_score) / 2) if validator_data else (analyst_score + whale_score) / 2
-    recommendation = validator_data.get("recommendation", "NORMAL") if validator_data else "NORMAL"
-    thesis = validator_data.get("thesis", "") if validator_data else ""
+    # Création du résultat final structuré pour app.py et reporter.py
     result = DebateResult(
-        final_verdict="INSIDER" if global_score > 65 else recommendation,
-        confidence=int(global_score),
-        summary=f"Wallet {state.wallet[:8]}... sur {state.market_slug}",
-        key_arguments=[thesis] if thesis else [state.breakdown.get("analyst", {}).get("reasoning", "")],
-        risk_assessment="Medium",
-        recommendation=validator_data.get("risk", "Rien a signaler") if validator_data else "Rien a signaler",
+        final_verdict="INSIDER" if confidence_score > 70 else "SUIVRE AVEC PRUDENCE",
+        confidence=confidence_score,
+        summary=f"Analyse du wallet {state.wallet[:8]}... sur {state.market_slug}",
+        key_arguments=[
+            f"✅ ANALYSTE : {analyst_opinion[:500]}...",
+            f"⚠️ CONTRADICTEUR : {critique[:500]}..."
+        ],
+        risk_assessment="Élevé" if confidence_score < 60 else "Modéré",
+        recommendation="Vérifier la liquidité avant d'entrer." if confidence_score < 70 else "Signal fort, surveiller les mouvements du wallet.",
         thematique=state.thematique
     )
+    
     return {"final_result": result}
 
+# --- POINT D'ENTRÉE DU SWARM ---
+
 def run_debate(signal: WalletSignal):
+    """Orchestre le débat entre l'Analyste et le Contradicteur."""
     try:
-        market_title = signal.market_slug.replace("-", " ").title()
-        scout_data = scout_node(market_title, signal.market_slug, signal.position_size, 50)
-        news_data = news_node(market_title)
-        state = analyst_node(signal)
-        state = whale_node(state)
-        analyst_score = state.breakdown.get("analyst", {}).get("score", 50)
-        whale_score = state.breakdown.get("whale", {}).get("whale_score", 50)
-        validator_data = validator_node(market_title, scout_data, news_data, analyst_score, whale_score)
-        result = final_decision(state, validator_data)
-        return result
+        # Étape 1 : Analyse
+        state_after_analyst = analyst_node(signal)
+        
+        # Étape 2 : Contradiction et Verdict
+        final_output = validator_node(state_after_analyst)
+        
+        return final_output
     except Exception as e:
-        print(f"Erreur run_debate: {e}")
+        print(f"Erreur dans le cycle run_debate: {e}")
         return None
