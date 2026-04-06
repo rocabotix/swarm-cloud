@@ -1,0 +1,8 @@
+groq
+requests
+python-dotenv
+streamlit
+apscheduler
+langchain-anthropic
+langchain-core
+pydantic
