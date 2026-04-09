@@ -9,7 +9,7 @@ from test_swarm import test_swarm
 # --- CONFIGURATION DE LA PAGE ---
 st.set_page_config(page_title="Polymarket Insider Swarm", page_icon="🎯", layout="wide")
 
-# Style CSS personnalisé pour un look "Terminal Tech"
+# Style CSS
 st.markdown("""
     <style>
     .stApp { background-color: #0e1117; color: #ffffff; }
@@ -23,7 +23,7 @@ def send_telegram_alert(results):
     chat_id = os.getenv("TELEGRAM_CHAT_ID")
     
     if not token or not chat_id:
-        print("⚠️ Config Telegram manquante dans les variables d'environnement.")
+        print("⚠️ Config Telegram manquante.")
         return
 
     header = f"🚨 *RAPPORT DU SWARM* ({datetime.now().strftime('%H:%M')})\n"
@@ -43,35 +43,30 @@ def send_telegram_alert(results):
     except Exception as e:
         print(f"❌ Erreur envoi Telegram: {e}")
 
-# --- LOGIQUE DU PLANIFICATEUR AUTOMATIQUE ---
+# --- LOGIQUE DU PLANIFICATEUR ---
 def autonomous_scan_job():
-    """Cette fonction tourne en arrière-plan sans bloquer l'interface"""
     print(f"⏰ [AUTO] Lancement du scan programmé : {datetime.now()}")
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
-        # On lance l'analyse
         results = loop.run_until_complete(test_swarm())
         if results:
             send_telegram_alert(results)
     finally:
         loop.close()
 
-# Initialisation du Scheduler une seule fois
 if 'scheduler_started' not in st.session_state:
     scheduler = BackgroundScheduler(daemon=True)
-    # Configuration : 7h et 19h UTC (équivalent 9h et 21h en France selon saison)
+    # 7h et 19h UTC = 9h et 21h France
     scheduler.add_job(autonomous_scan_job, 'cron', hour=7, minute=0)
     scheduler.add_job(autonomous_scan_job, 'cron', hour=19, minute=0)
     scheduler.start()
     st.session_state.scheduler_started = True
-    print("✅ Scheduler interne activé.")
 
-# --- INTERFACE UTILISATEUR STREAMLIT ---
+# --- INTERFACE UTILISATEUR ---
 st.title("🎯 Polymarket Insider Swarm")
 st.write("Analyse multi-agents des marchés prédictifs via Groq Llama-3.")
 
-# Colonnes pour les stats rapides
 col1, col2, col3 = st.columns(3)
 col1.metric("Status", "Opérationnel", "Cloud")
 col2.metric("Fréquence", "2 / jour", "Auto")
@@ -79,17 +74,13 @@ col3.metric("Mode", "Gratuit", "Optimisé")
 
 st.divider()
 
-# Bouton d'analyse manuelle
 if st.button("🚀 LANCER UNE ANALYSE MANUELLE MAINTENANT"):
-    with st.spinner("Le Swarm interroge Polymarket et débat..."):
-        # On lance l'analyse manuelle
+    with st.spinner("Le Swarm interroge Polymarket..."):
         results = asyncio.run(test_swarm())
         st.session_state.last_results = results
-        # On envoie aussi sur Telegram
         send_telegram_alert(results)
         st.success("Analyse terminée et envoyée sur Telegram !")
 
-# Affichage des derniers résultats dans l'interface
 if 'last_results' in st.session_state:
     for res in st.session_state.last_results:
         with st.expander(f"Signal : {res.thematique} ({res.confidence}%)", expanded=True):
@@ -100,4 +91,3 @@ if 'last_results' in st.session_state:
 st.sidebar.title("🛠 Configuration")
 st.sidebar.info(f"📡 Scheduler : {'ACTIF' if st.session_state.get('scheduler_started') else 'OFF'}")
 st.sidebar.write("Prochains scans : 09:00 & 21:00")
-st.sidebar.warning("Note : Utilisez UptimeRobot pour garder ce service éveillé 24h/24.")
