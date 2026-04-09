@@ -6,3 +6,4 @@ apscheduler
 langchain-anthropic
 langchain-core
 pydantic
+duckduckgo-search

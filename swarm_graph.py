@@ -1,33 +1,30 @@
+import os
 import json
 from groq import Groq
+from duckduckgo_search import DDGS
 from models import WalletSignal, DebateResult
-from config import GROQ_API_KEY
 
-# Initialisation du client Groq
-client = Groq(api_key=GROQ_API_KEY)
+# Initialisation du client Groq (la clé doit être dans tes variables Render)
+client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
-# --- CONFIGURATION DES AGENTS (PROMPTS) ---
+# --- FONCTIONS DE RECHERCHE ET IA ---
 
-SYSTEM_ANALYST = """Tu es l'Analyste 'Insider' du Swarm Polymarket. 
-Ton rôle est de trouver des preuves qu'un mouvement de portefeuille est un signal d'achat intelligent (Smart Money).
-Concentre-toi sur : 
-1. La taille de la position.
-2. L'historique du wallet (Est-ce un habitué ou un nouveau compte suspect ?).
-3. La pertinence du pari par rapport à la thématique.
-RESTE STRICTEMENT CONCENTRÉ SUR LES DONNÉES FOURNIES. Ne parle pas d'autres sujets."""
-
-SYSTEM_CONTRADICTEUR = """Tu es l'Avocat du Diable (Le Contradicteur). 
-Ton unique but est de critiquer l'analyse de l'Analyste et de trouver des risques.
-Cherche :
-1. Les risques de manipulation (Wash Trading).
-2. Le manque de liquidité du marché.
-3. Les facteurs externes que l'analyste ignore (News, blessures, délais).
-Sois sceptique, pessimiste et direct. Ne sois jamais d'accord par défaut."""
-
-# --- FONCTIONS UTILITAIRES ---
+def get_web_context(topic):
+    """Récupère les dernières actualités sur le sujet via DuckDuckGo."""
+    try:
+        with DDGS() as ddgs:
+            # On cherche spécifiquement l'actualité liée à Polymarket et au sujet
+            query = f"{topic} news polymarket"
+            results = [r for r in ddgs.text(query, max_results=3)]
+            if not results:
+                return "Aucune actualité récente spécifique trouvée."
+            return "\n".join([f"- {r['title']}: {r['body'][:200]}..." for r in results])
+    except Exception as e:
+        print(f"Erreur recherche DuckDuckGo: {e}")
+        return "Contexte web indisponible."
 
 def call_llm(prompt, system_prompt):
-    """Appelle le LLM avec un système strict pour éviter les mélanges de thématiques."""
+    """Appelle le modèle Llama 3 via Groq avec des paramètres de précision."""
     try:
         response = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
@@ -35,75 +32,83 @@ def call_llm(prompt, system_prompt):
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": prompt}
             ],
-            temperature=0.2,  # Température basse pour éviter les hallucinations/mélanges
+            temperature=0.3, # Température basse pour éviter les hallucinations
             max_tokens=800
         )
         return response.choices[0].message.content
     except Exception as e:
-        return f"Erreur agent : {str(e)}"
+        return f"Erreur Agent LLM: {str(e)}"
 
-# --- NODES DU GRAPHE ---
+# --- NODES DU GRAPHE (AGENTS) ---
 
 def analyst_node(signal: WalletSignal):
-    """Premier agent : Analyse le signal positivement."""
-    prompt = f"""Analyse ce signal On-Chain pour le marché '{signal.market_slug}' :
-    - Wallet: {signal.wallet}
-    - Taille Position: {signal.position_size} USDC
-    - Âge du compte: {signal.age_days} jours
-    - Thématique: {signal.thematique}
+    """Agent Analyste : Interprète le signal avec le contexte Web."""
+    news_context = get_web_context(signal.market_slug)
     
-    Explique pourquoi c'est un signal intéressant."""
+    system_prompt = """Tu es l'Analyste 'Insider' de l'essaim. 
+    Ton but : prouver que ce mouvement de fonds est un signal intelligent.
+    Utilise les news fournies pour donner du sens au pari."""
     
-    reasoning = call_llm(prompt, SYSTEM_ANALYST)
-    signal.breakdown["analyst"] = {"reasoning": reasoning}
+    prompt = f"""MARCHÉ : {signal.market_slug}
+    ACTUALITÉ RÉCENTE : 
+    {news_context}
+    
+    DONNÉES ON-CHAIN :
+    - Wallet : {signal.wallet}
+    - Position : {signal.position_size} USDC
+    
+    Explique pourquoi ce mouvement est stratégique en fonction des news."""
+    
+    reasoning = call_llm(prompt, system_prompt)
+    signal.breakdown["analyst"] = {"reasoning": reasoning, "news": news_context}
     return signal
 
 def validator_node(state: WalletSignal):
-    """Deuxième agent : Contredit l'analyse et génère le résultat final."""
-    analyst_opinion = state.breakdown.get("analyst", {}).get("reasoning", "Pas d'analyse disponible.")
+    """Agent Contradicteur : Cherche les failles et rend le verdict final."""
+    analyst_opinion = state.breakdown.get("analyst", {}).get("reasoning", "Pas d'analyse.")
     
-    prompt = f"""Voici l'analyse positive de mon collègue pour le marché '{state.market_slug}' :
-    ---
-    {analyst_opinion}
-    ---
-    Trouve les failles et les risques majeurs liés à ce pari et à ce wallet précis. 
-    Ne parle QUE de ce marché ({state.market_slug})."""
+    system_prompt = """Tu es l'Avocat du Diable.
+    Ton but : critiquer l'analyse précédente et souligner les risques (manipulation, rumeurs infondées, manque de liquidité)."""
     
-    critique = call_llm(prompt, SYSTEM_CONTRADICTEUR)
+    prompt = f"""Voici l'analyse de ton collègue sur {state.market_slug} :
+    '{analyst_opinion}'
     
-    # Calcul d'un score de confiance simplifié
-    confidence_score = 75
-    if "RISQUE ÉLEVÉ" in critique.upper() or "DANGER" in critique.upper():
-        confidence_score = 55
+    Contredis ses arguments et liste les risques majeurs."""
+    
+    critique = call_llm(prompt, system_prompt)
+    
+    # Calcul de confiance logique
+    confidence = 85 if "fort" in analyst_opinion.lower() else 65
+    if "danger" in critique.lower() or "risque" in critique.lower():
+        confidence -= 15
 
-    # Création du résultat final structuré pour app.py et reporter.py
+    # Construction du résultat final
     result = DebateResult(
-        final_verdict="INSIDER" if confidence_score > 70 else "SUIVRE AVEC PRUDENCE",
-        confidence=confidence_score,
-        summary=f"Analyse du wallet {state.wallet[:8]}... sur {state.market_slug}",
+        final_verdict="INSIDER" if confidence > 70 else "PRUDENCE",
+        confidence=confidence,
+        summary=f"Analyse de {state.market_slug} basée sur les flux récents.",
         key_arguments=[
-            f"✅ ANALYSTE : {analyst_opinion[:500]}...",
-            f"⚠️ CONTRADICTEUR : {critique[:500]}..."
+            f"✅ ANALYSTE : {analyst_opinion[:600]}",
+            f"⚠️ CONTRADICTEUR : {critique[:600]}"
         ],
-        risk_assessment="Élevé" if confidence_score < 60 else "Modéré",
-        recommendation="Vérifier la liquidité avant d'entrer." if confidence_score < 70 else "Signal fort, surveiller les mouvements du wallet.",
+        risk_assessment="Élevé" if confidence < 60 else "Modéré",
+        recommendation="Suivre le mouvement" if confidence > 75 else "Attendre confirmation",
         thematique=state.thematique
     )
-    
     return {"final_result": result}
 
-# --- POINT D'ENTRÉE DU SWARM ---
+# --- FONCTION PRINCIPALE ---
 
 def run_debate(signal: WalletSignal):
-    """Orchestre le débat entre l'Analyste et le Contradicteur."""
+    """Lance le cycle complet de l'essaim."""
     try:
-        # Étape 1 : Analyse
-        state_after_analyst = analyst_node(signal)
+        # 1. L'Analyste étudie le cas avec les news
+        updated_signal = analyst_node(signal)
         
-        # Étape 2 : Contradiction et Verdict
-        final_output = validator_node(state_after_analyst)
+        # 2. Le Contradicteur valide ou démonte l'analyse
+        final_output = validator_node(updated_signal)
         
         return final_output
     except Exception as e:
-        print(f"Erreur dans le cycle run_debate: {e}")
+        print(f"Erreur run_debate: {e}")
         return None

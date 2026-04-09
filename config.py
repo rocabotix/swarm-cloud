@@ -17,8 +17,8 @@ TAG_FILTERS = {
 
 # ====================== PARAMÈTRES DU SWARM ======================
 MAX_HOLDERS_PER_MARKET = 8
-MIN_POSITION_SIZE = 500          # en USDC
-MIN_WALLET_AGE_DAYS = 30
+MIN_POSITION_SIZE = 100          # en USDC
+MIN_WALLET_AGE_DAYS = 0
 
 # ====================== SCHEDULER ======================
 REPORT_HOUR_UTC = 8   # Heure à laquelle le rapport quotidien est envoyé (UTC)
