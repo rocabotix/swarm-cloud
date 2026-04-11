@@ -1,15 +1,72 @@
 import asyncio
 import logging
+import smtplib
+import os
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timezone
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from dotenv import load_dotenv
 from config import THEMATIQUES, REPORT_HOUR_UTC
 from reporter import generate_daily_report
 from test_swarm import test_swarm
-from run_daily import send_email, build_html_report
+
+load_dotenv()
+EMAIL_SENDER = os.getenv("EMAIL_SENDER")
+EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
+EMAIL_RECEIVER = os.getenv("EMAIL_RECEIVER")
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(levelname)s | %(message)s')
 logger = logging.getLogger(__name__)
+def build_html_report(results, session, now):
+    rows = ""
+    for i, r in enumerate(results):
+        color = "#2ecc71" if r.confidence > 65 else "#f39c12" if r.confidence > 40 else "#e74c3c"
+        rows += f"""
+        <tr>
+            <td style="padding:10px;border-bottom:1px solid #333;">{i+1}. {r.thematique}</td>
+            <td style="padding:10px;border-bottom:1px solid #333;color:{color};font-weight:bold;">{r.final_verdict}</td>
+            <td style="padding:10px;border-bottom:1px solid #333;">{r.confidence}%</td>
+            <td style="padding:10px;border-bottom:1px solid #333;">{r.recommendation[:80]}</td>
+        </tr>"""
+    if not results:
+        rows = '<tr><td colspan="4" style="padding:20px;text-align:center;color:#888;">Aucun signal</td></tr>'
+    return f"""
+    <html><body style="background:#1a1a2e;color:#eee;font-family:Arial,sans-serif;padding:20px;">
+    <div style="max-width:700px;margin:auto;background:#16213e;border-radius:12px;padding:30px;">
+    <h1 style="color:#00d4ff;text-align:center;">Polymarket Insider Swarm</h1>
+    <p style="text-align:center;color:#888;">Session {session} - {now.strftime('%d/%m/%Y %H:%M')} UTC</p>
+    <hr style="border-color:#333;margin:20px 0;">
+    <h2 style="color:#00d4ff;">Signaux : {len(results)}</h2>
+    <table style="width:100%;border-collapse:collapse;">
+    <tr style="background:#0f3460;color:#00d4ff;">
+        <th style="padding:10px;text-align:left;">Thematique</th>
+        <th style="padding:10px;text-align:left;">Verdict</th>
+        <th style="padding:10px;text-align:left;">Score</th>
+        <th style="padding:10px;text-align:left;">Recommandation</th>
+    </tr>
+    {rows}
+    </table>
+    <hr style="border-color:#333;margin:20px 0;">
+    <p style="color:#888;font-size:12px;text-align:center;">Rapport genere par Polymarket Insider Swarm. Pas un conseil financier.</p>
+    </div></body></html>"""
 
+def send_email(subject, html_body, text_body):
+    try:
+        msg = MIMEMultipart("alternative")
+        msg["From"] = EMAIL_SENDER
+        msg["To"] = EMAIL_RECEIVER
+        msg["Subject"] = subject
+        msg.attach(MIMEText(text_body, "plain"))
+        msg.attach(MIMEText(html_body, "html"))
+        server = smtplib.SMTP("smtp.gmail.com", 587)
+        server.starttls()
+        server.login(EMAIL_SENDER, EMAIL_PASSWORD)
+        server.sendmail(EMAIL_SENDER, EMAIL_RECEIVER, msg.as_string())
+        server.quit()
+        print("Email envoye avec succes")
+    except Exception as e:
+        print(f"Erreur email: {e}")
 async def daily_job():
     now = datetime.now(timezone.utc)
     session = "matin" if now.hour < 12 else "soir"
@@ -20,18 +77,16 @@ async def daily_job():
         html_report = build_html_report(all_results, session, now)
         subject = f"Polymarket Swarm - Rapport {session} {now.strftime('%d/%m/%Y')}"
         send_email(subject, html_report, report)
-        print("Rapport envoye par email avec succes")
     except Exception as e:
         logger.error(f"Erreur critique: {e}")
+
 async def main():
     print("=" * 60)
     print("POLYMARKET INSIDER SWARM - ACTIVE")
     print(f"Thematiques : {THEMATIQUES}")
     print(f"Planification : {REPORT_HOUR_UTC}:00 UTC tous les jours")
     print("=" * 60)
-
     await daily_job()
-
     scheduler = AsyncIOScheduler()
     scheduler.add_job(
         daily_job,
@@ -42,7 +97,6 @@ async def main():
     )
     scheduler.start()
     print("Scheduler demarre. En attente du prochain creneau...")
-
     try:
         while True:
             await asyncio.sleep(3600)
