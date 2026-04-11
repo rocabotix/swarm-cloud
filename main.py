@@ -1,9 +1,8 @@
 import asyncio
 import logging
-import smtplib
 import os
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
+import json
+import urllib.request
 from datetime import datetime, timezone
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from dotenv import load_dotenv
@@ -13,8 +12,8 @@ from test_swarm import test_swarm
 
 load_dotenv()
 EMAIL_SENDER = os.getenv("EMAIL_SENDER")
-EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
 EMAIL_RECEIVER = os.getenv("EMAIL_RECEIVER")
+SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY")
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(levelname)s | %(message)s')
 logger = logging.getLogger(__name__)
@@ -31,8 +30,7 @@ def build_html_report(results, session, now):
         </tr>"""
     if not results:
         rows = '<tr><td colspan="4" style="padding:20px;text-align:center;color:#888;">Aucun signal</td></tr>'
-    return f"""
-    <html><body style="background:#1a1a2e;color:#eee;font-family:Arial,sans-serif;padding:20px;">
+    return f"""<html><body style="background:#1a1a2e;color:#eee;font-family:Arial,sans-serif;padding:20px;">
     <div style="max-width:700px;margin:auto;background:#16213e;border-radius:12px;padding:30px;">
     <h1 style="color:#00d4ff;text-align:center;">Polymarket Insider Swarm</h1>
     <p style="text-align:center;color:#888;">Session {session} - {now.strftime('%d/%m/%Y %H:%M')} UTC</p>
@@ -44,29 +42,11 @@ def build_html_report(results, session, now):
         <th style="padding:10px;text-align:left;">Verdict</th>
         <th style="padding:10px;text-align:left;">Score</th>
         <th style="padding:10px;text-align:left;">Recommandation</th>
-    </tr>
-    {rows}
+    </tr>{rows}
     </table>
     <hr style="border-color:#333;margin:20px 0;">
     <p style="color:#888;font-size:12px;text-align:center;">Rapport genere par Polymarket Insider Swarm. Pas un conseil financier.</p>
-    </div></body></html>"""
-
-def send_email(subject, html_body, text_body):
-    try:
-        msg = MIMEMultipart("alternative")
-        msg["From"] = EMAIL_SENDER
-        msg["To"] = EMAIL_RECEIVER
-        msg["Subject"] = subject
-        msg.attach(MIMEText(text_body, "plain"))
-        msg.attach(MIMEText(html_body, "html"))
-        server = smtplib.SMTP("smtp.gmail.com", 587)
-        server.starttls()
-        server.login(EMAIL_SENDER, EMAIL_PASSWORD)
-        server.sendmail(EMAIL_SENDER, EMAIL_RECEIVER, msg.as_string())
-        server.quit()
-        print("Email envoye avec succes")
-    except Exception as e:
-        print(f"Erreur email: {e}")
+    </
 async def daily_job():
     now = datetime.now(timezone.utc)
     session = "matin" if now.hour < 12 else "soir"
