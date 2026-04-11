@@ -74,7 +74,7 @@ async def daily_job():
         all_results = await test_swarm()
         report = generate_daily_report(all_results)
         html_report = build_html_report(all_results, session, now)
-        subject = f"Polymarket Swarm - R
+        subject = "Polymarket Swarm - Rapport " + session + " " + now.strftime('%d/%m/%Y')
 apport {session} {now.strftime('%d/%m/%Y')}"
         send_email(subject, html_report, report)
     except Exception as e:
