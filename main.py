@@ -17,6 +17,31 @@ SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY")
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(levelname)s | %(message)s')
 logger = logging.getLogger(__name__)
+
+def send_email(subject, html_body, text_body):
+    try:
+        data = json.dumps({
+            "personalizations": [{"to": [{"email": EMAIL_RECEIVER}]}],
+            "from": {"email": EMAIL_SENDER},
+            "subject": subject,
+            "content": [
+                {"type": "text/plain", "value": text_body},
+                {"type": "text/html", "value": html_body}
+            ]
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            "https://api.sendgrid.com/v3/mail/send",
+            data=data,
+            headers={
+                "Authorization": f"Bearer {SENDGRID_API_KEY}",
+                "Content-Type": "application/json"
+            },
+            method="POST"
+        )
+        urllib.request.urlopen(req)
+        print("Email envoye avec succes via SendGrid")
+    except Exception as e:
+        print(f"Erreur email SendGrid: {e}")
 def build_html_report(results, session, now):
     rows = ""
     for i, r in enumerate(results):
@@ -40,6 +65,7 @@ def build_html_report(results, session, now):
     html += "<p style='color:#888;font-size:12px'>Pas un conseil financier.</p>"
     html += "</body></html>"
     return html
+
 async def daily_job():
     now = datetime.now(timezone.utc)
     session = "matin" if now.hour < 12 else "soir"
@@ -48,11 +74,11 @@ async def daily_job():
         all_results = await test_swarm()
         report = generate_daily_report(all_results)
         html_report = build_html_report(all_results, session, now)
-        subject = f"Polymarket Swarm - Rapport {session} {now.strftime('%d/%m/%Y')}"
+        subject = f"Polymarket Swarm - R
+apport {session} {now.strftime('%d/%m/%Y')}"
         send_email(subject, html_report, report)
     except Exception as e:
         logger.error(f"Erreur critique: {e}")
-
 async def main():
     print("=" * 60)
     print("POLYMARKET INSIDER SWARM - ACTIVE")
