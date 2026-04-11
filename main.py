@@ -21,32 +21,25 @@ def build_html_report(results, session, now):
     rows = ""
     for i, r in enumerate(results):
         color = "#2ecc71" if r.confidence > 65 else "#f39c12" if r.confidence > 40 else "#e74c3c"
-        rows += f"""
-        <tr>
-            <td style="padding:10px;border-bottom:1px solid #333;">{i+1}. {r.thematique}</td>
-            <td style="padding:10px;border-bottom:1px solid #333;color:{color};font-weight:bold;">{r.final_verdict}</td>
-            <td style="padding:10px;border-bottom:1px solid #333;">{r.confidence}%</td>
-            <td style="padding:10px;border-bottom:1px solid #333;">{r.recommendation[:80]}</td>
-        </tr>"""
-    if not results:
-        rows = '<tr><td colspan="4" style="padding:20px;text-align:center;color:#888;">Aucun signal</td></tr>'
-    return f"""<html><body style="background:#1a1a2e;color:#eee;font-family:Arial,sans-serif;padding:20px;">
-    <div style="max-width:700px;margin:auto;background:#16213e;border-radius:12px;padding:30px;">
-    <h1 style="color:#00d4ff;text-align:center;">Polymarket Insider Swarm</h1>
-    <p style="text-align:center;color:#888;">Session {session} - {now.strftime('%d/%m/%Y %H:%M')} UTC</p>
-    <hr style="border-color:#333;margin:20px 0;">
-    <h2 style="color:#00d4ff;">Signaux : {len(results)}</h2>
-    <table style="width:100%;border-collapse:collapse;">
-    <tr style="background:#0f3460;color:#00d4ff;">
-        <th style="padding:10px;text-align:left;">Thematique</th>
-        <th style="padding:10px;text-align:left;">Verdict</th>
-        <th style="padding:10px;text-align:left;">Score</th>
-        <th style="padding:10px;text-align:left;">Recommandation</th>
-    </tr>{rows}
-    </table>
-    <hr style="border-color:#333;margin:20px 0;">
-    <p style="color:#888;font-size:12px;text-align:center;">Rapport genere par Polymarket Insider Swarm. Pas un conseil financier.</p>
-    </
+        rows += "<tr>"
+        rows += f"<td style='padding:10px'>{i+1}. {r.thematique}</td>"
+        rows += f"<td style='padding:10px;color:{color}'>{r.final_verdict}</td>"
+        rows += f"<td style='padding:10px'>{r.confidence}%</td>"
+        rows += f"<td style='padding:10px'>{r.recommendation[:80]}</td>"
+        rows += "</tr>"
+    html = "<html><body style='background:#1a1a2e;color:#eee;padding:20px'>"
+    html += "<h1 style='color:#00d4ff'>Polymarket Insider Swarm</h1>"
+    html += f"<p>Session {session} - {now.strftime('%d/%m/%Y %H:%M')} UTC</p>"
+    html += f"<p>Signaux : {len(results)}</p>"
+    html += "<table style='width:100%;border-collapse:collapse'>"
+    html += "<tr style='background:#0f3460;color:#00d4ff'>"
+    html += "<th>Thematique</th><th>Verdict</th><th>Score</th><th>Recommandation</th>"
+    html += "</tr>"
+    html += rows
+    html += "</table>"
+    html += "<p style='color:#888;font-size:12px'>Pas un conseil financier.</p>"
+    html += "</body></html>"
+    return html
 async def daily_job():
     now = datetime.now(timezone.utc)
     session = "matin" if now.hour < 12 else "soir"
