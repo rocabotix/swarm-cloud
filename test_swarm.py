@@ -1,63 +1,60 @@
 import asyncio
-import logging
-from config import THEMATIQUES, TAG_FILTERS
-from api_client import get_trending_markets, get_top_holders
-from swarm_graph import run_debate
-from models import WalletSignal, DebateResult # Import correct depuis models
+import os
+from dataclasses import dataclass
+from typing import List
+from groq import Groq
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s | %(levelname)s | %(message)s')
-logger = logging.getLogger(__name__)
+client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+
+@dataclass
+class SwarmResult:
+    thematique: str
+    final_verdict: str
+    confidence: int
+    summary: str
+    recommendation: str
+    key_arguments: List[str]
+    risk_assessment: str
+    kelly_criterion: str
 
 async def test_swarm():
-    print("🚀 Démarrage du Swarm...")
-    all_results = []
-    
-    for thema in THEMATIQUES:
-        try:
-            tag_filter = TAG_FILTERS.get(thema, thema.lower())
-            trending = get_trending_markets(limit=10, tag_filter=tag_filter)
-            
-            if not trending:
-                continue
+    # 1. DONNÉES SIMULÉES (À remplacer par API Polymarket plus tard)
+    raw_markets = [
+        {"title": "GTA VI Release", "volume": 1000000, "liquidity": 500000},
+        {"title": "US TikTok Ban by August", "volume": 450000, "liquidity": 40000}, # Anomalie !
+        {"title": "Bitcoin Price $100k", "volume": 5000000, "liquidity": 2000000},
+        {"title": "New Tech CEO Announcement", "volume": 150000, "liquidity": 15000} # Anomalie !
+    ]
 
-            market = trending[0]
-            market_slug = market.get("slug")
-            
-            holders = get_top_holders(market_slug, limit=3, min_balance=100)
-            
-            if holders:
-                for holder in holders[:2]:
-                    # Sécurisation des données API
-                    wallet = holder.get("proxyWallet") or holder.get("userId", "unknown")
-                    try:
-                        size = float(holder.get("size", 0))
-                    except:
-                        size = 0.0
+    # 2. FILTRAGE ANTI-BRUIT
+    excluded = ["GTA", "BITCOIN", "BTC", "ETH", "SOLANA", "DOGE"]
+    filtered = [m for m in raw_markets if not any(x in m['title'].upper() for x in excluded)]
 
-                    signal = WalletSignal(
-                        wallet=wallet,
-                        market_slug=market_slug,
-                        thematique=thema,
-                        position_size=size,
-                        age_days=30,
-                        risk_level="Medium"
-                    )
-                    
-                    debate = run_debate(signal)
-                    if debate and "final_result" in debate:
-                        all_results.append(debate["final_result"])
+    results = []
+    for market in filtered[:3]:
+        vol_liq_ratio = market['volume'] / market['liquidity']
         
-        except Exception as e:
-            logger.error(f"Erreur sur {thema}: {e}")
+        # Débat IA
+        response = client.chat.completions.create(
+            messages=[
+                {"role": "system", "content": "Tu es un analyste financier expert en détection d'insiders. Sois froid et critique."},
+                {"role": "user", "content": f"Analyse le marché : {market['title']}. Ratio Vol/Liq : {vol_liq_ratio}. Est-ce une accumulation suspecte ?"}
+            ],
+            model="llama3-70b-8192",
+            temperature=0.2
+        )
+        
+        analysis = response.choices[0].message.content
+        conf = 90 if vol_liq_ratio > 3 else 70
 
-    if not all_results:
-        all_results.append(DebateResult(
-            final_verdict="TEST SYSTÈME",
-            confidence=99,
-            summary="Scanner actif, aucun mouvement majeur détecté.",
-            key_arguments=["✅ API OK", "⚠️ Calme plat"],
-            risk_assessment="NUL",
-            recommendation="RAS",
-            thematique="TEST"
+        results.append(SwarmResult(
+            thematique=market['title'],
+            final_verdict="ACHAT / ACCUMULATION" if vol_liq_ratio > 3 else "OBSERVATION",
+            confidence=conf,
+            summary=analysis,
+            recommendation=f"Ratio Vol/Liq exceptionnel de {vol_liq_ratio:.2f}",
+            key_arguments=["Anomalie quantitative", "Mouvement Smart Money"],
+            risk_assessment="ÉLEVÉ (Marché de niche)",
+            kelly_criterion="Miser 2% du capital" if conf > 85 else "Ne pas miser"
         ))
-    return all_results
+    return results
