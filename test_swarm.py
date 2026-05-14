@@ -22,38 +22,41 @@ class SwarmResult:
 async def test_swarm():
     raw_markets = []
     
-    # 1. RÉCUPÉRATION DES DONNÉES (API GAMMA)
+    # 1. RÉCUPÉRATION DES DONNÉES (On élargit pour trouver plus de politique)
     try:
-        # On récupère 100 événements pour avoir plus de choix
-        url = "https://gamma-api.polymarket.com/events?active=true&closed=false&limit=100"
+        url = "https://gamma-api.polymarket.com/events?active=true&closed=false&limit=200"
         response = requests.get(url, timeout=15)
         if response.status_code != 200: return []
         data = response.json()
 
+        # MOTS-CLÉS POLITIQUES OBLIGATOIRES
+        political_keywords = [
+            "PRESIDENT", "ELECTION", "DEMOCRAT", "REPUBLICAN", "SENATE", 
+            "HOUSE", "GOVERNOR", "TRUMP", "BIDEN", "WHITE HOUSE", 
+            "SUPREME COURT", "VOTE", "NOMINEE", "POLITICAL", "CONGRESS"
+        ]
+
         for event in data:
-            title = event.get('title', 'Titre inconnu')
-            markets_list = event.get('markets', [])
+            title = event.get('title', 'Titre inconnu').upper()
             
+            # FILTRE : On ne garde QUE la politique
+            if not any(word in title for word in political_keywords):
+                continue
+                
+            markets_list = event.get('markets', [])
             if markets_list:
                 m = markets_list[0]
                 try:
-                    # Volume 24h (si dispo) ou volume total
                     v24 = float(m.get('volume24hr', 0))
-                    v_total = float(m.get('volume', 0))
                     liq = float(m.get('liquidity', 0))
                     
-                    # FILTRE : On ne veut que du "sérieux" (Liq > 2000$)
-                    if liq < 2000:
-                        continue
+                    # Liquidité minimum pour éviter les marchés morts (1000$)
+                    if liq < 1000: continue
                     
-                    # CALCUL DE L'ACCÉLÉRATION (Velocity)
-                    # Si le volume 24h représente une grosse part de la liquidité = SUSPECT
                     velocity = v24 / liq if liq > 0 else 0
-                    
                     raw_markets.append({
-                        "title": title,
+                        "title": title.title(),
                         "v24": v24,
-                        "v_total": v_total,
                         "liq": liq,
                         "velocity": velocity
                     })
@@ -63,52 +66,40 @@ async def test_swarm():
         print(f"Erreur Fetch: {e}")
         return []
 
-    # 2. TRI PAR VÉLOCITÉ (Les plus agressifs en premier)
-    # On exclut les bruits habituels
-    excluded = ["GTA", "BITCOIN", "BTC", "ETH", "SOLANA", "DOGE", "PRICE"]
-    filtered = [m for m in raw_markets if not any(x in m['title'].upper() for x in excluded)]
-    
-    # On trie par le score de vélocité
-    filtered = sorted(filtered, key=lambda x: x['velocity'], reverse=True)
+    # 2. TRI PAR VÉLOCITÉ (Les mouvements les plus suspects)
+    filtered = sorted(raw_markets, key=lambda x: x['velocity'], reverse=True)
 
     if not filtered:
         return []
 
     results = []
 
-    # 3. ANALYSE IA SUR LES 3 MEILLEURS SIGNAUX D'URGENCE
+    # 3. ANALYSE IA SPÉCIALISÉE "INSIDER POLITIQUE"
     for market in filtered[:3]:
-        title = market['title']
-        v24, liq, vel = market['v24'], market['liq'], market['velocity']
+        title, v24, liq, vel = market['title'], market['v24'], market['liq'], market['velocity']
 
         try:
             response = client.chat.completions.create(
                 messages=[
-                    {"role": "system", "content": "Tu es un expert en flux financiers clandestins et détection d'insiders. Ton but est d'analyser si une accélération de volume est liée à une fuite d'information."},
-                    {"role": "user", "content": f"""Analyse d'urgence pour : '{title}'
-                    - Volume 24h : ${v24:,.0f}
-                    - Liquidité : ${liq:,.0f}
-                    - Score d'accélération : {vel:.2f}
-                    
-                    Si le score d'accélération est > 1.0, cela signifie que le volume des dernières 24h dépasse la liquidité totale disponible. C'est un signe majeur d'entrée massive d'initiés."""}
+                    {"role": "system", "content": "Tu es un analyste expert en renseignements politiques et financement de campagne. Ton but est de détecter si une injection de capital sur Polymarket précède une annonce politique majeure (sondage secret, retrait de candidat, décision judiciaire)."},
+                    {"role": "user", "content": f"ALERTE POLITIQUE : '{title}'. Vol 24h: ${v24:,.0f} | Liq: ${liq:,.0f} | Ratio: {vel:.2f}."}
                 ],
                 model="llama-3.3-70b-versatile",
-                temperature=0.1, # Très froid pour plus de précision
+                temperature=0.1,
             )
             
             analysis = response.choices[0].message.content
-            # Confiance basée sur la vélocité
-            conf = min(98, int(75 + (vel * 10)))
+            conf = min(98, int(80 + (vel * 12)))
 
             results.append(SwarmResult(
                 thematique=title,
-                final_verdict="URGENCE INITIÉ" if vel > 1.5 else "ACCUMULATION FORTE",
+                final_verdict="INSIDER POLITIQUE" if vel > 0.8 else "FLUX ÉLECTORAL",
                 confidence=conf,
                 summary=analysis,
-                recommendation=f"Vélocité de {vel:.2f}. Entrée de capitaux agressive détectée.",
-                key_arguments=[f"Le volume 24h représente {vel*100:.1f}% de la liquidité."],
-                risk_assessment="TRÈS ÉLEVÉ" if vel > 2 else "MODÉRÉ",
-                kelly_criterion=f"Mise {min(4.0, vel+1):.1f}%"
+                recommendation=f"Vélocité Politique: {vel:.2f}.",
+                key_arguments=[f"Mouvement suspect détecté sur le segment {title}"],
+                risk_assessment="ÉLEVÉ" if vel > 1.5 else "MODÉRÉ",
+                kelly_criterion=f"Mise {min(5.0, vel+1.5):.1f}%"
             ))
         except:
             continue
@@ -117,4 +108,4 @@ async def test_swarm():
 
 if __name__ == "__main__":
     res = asyncio.run(test_swarm())
-    for r in res: print(f"\n🚀 {r.thematique} - Verdict: {r.final_verdict} (Score: {r.confidence})")
+    for r in res: print(f"\n🏛️ {r.thematique} - Verdict: {r.final_verdict}")
