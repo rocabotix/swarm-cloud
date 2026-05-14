@@ -6,6 +6,7 @@ from typing import List
 from groq import Groq
 
 # --- CONFIGURATION DU CLIENT ---
+# Assure-toi que la variable d'environnement GROQ_API_KEY est bien configurée sur Render
 client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
 @dataclass
@@ -21,13 +22,12 @@ class SwarmResult:
 
 async def test_swarm():
     """
-    Scanne Polymarket, traite les données et fait débattre le Swarm.
+    Récupère les données réelles de Polymarket et les analyse avec le bon modèle LLM.
     """
     raw_markets = []
     
-    # 1. RÉCUPÉRATION DES DONNÉES (API GAMMA)
+    # 1. RÉCUPÉRATION DES DONNÉES RÉELLES (API GAMMA POLYMARKET)
     try:
-        # On cible les marchés actifs
         url = "https://gamma-api.polymarket.com/events?active=true&closed=false&limit=50"
         response = requests.get(url, timeout=15)
         
@@ -45,16 +45,16 @@ async def test_swarm():
             if markets_list:
                 m = markets_list[0]
                 
-                # Conversion sécurisée en float
                 try:
+                    # Extraction et conversion des données financières
                     v = float(m.get('volume', 0))
                     l = float(m.get('liquidity', 1))
                     l = l if l > 0 else 1
                     ratio = v / l
-                except:
+                except Exception:
                     v, l, ratio = 0, 1, 0
                 
-                # Seuil minimal pour éviter le spam
+                # On ne garde que les marchés avec un minimum d'activité pour l'analyse
                 if v > 100:
                     raw_markets.append({
                         "title": title,
@@ -64,42 +64,48 @@ async def test_swarm():
                     })
 
     except Exception as e:
-        print(f"❌ Erreur lors du fetch : {e}")
+        print(f"❌ Erreur lors de la récupération des données : {e}")
         return []
 
     # 2. FILTRAGE ET TRI
-    # Tri par volume pour avoir les marchés les plus sérieux
+    # On trie par volume pour analyser les sujets les plus importants
     raw_markets = sorted(raw_markets, key=lambda x: x['volume'], reverse=True)
     
-    # On prend les marchés à analyser
-    target_markets = raw_markets[:5]
+    # Sélection des 3 premières anomalies ou gros volumes
+    target_markets = raw_markets[:3]
 
     if not target_markets:
-        print("🔍 Aucun marché avec volume > 100 trouvé.")
+        print("🔍 Aucun marché éligible trouvé.")
         return []
 
     results = []
 
-    # 3. ANALYSE PAR LE SWARM
-    for market in target_markets[:3]:
+    # 3. ANALYSE PAR LE SWARM D'AGENTS
+    for market in target_markets:
         title = market['title']
         v = market['volume']
         l = market['liquidity']
         r = market['ratio']
 
-        print(f"🧠 [IA] Analyse en cours : {title}")
+        print(f"🧠 [IA] Analyse en cours : {title} (Ratio: {r:.2f})")
 
         try:
-            # CORRECTION : Utilisation du modèle 'versatile' (le nouveau standard)
+            # --- UTILISATION DU BON MODÈLE : llama-3.3-70b-versatile ---
             response = client.chat.completions.create(
                 messages=[
                     {
                         "role": "system", 
-                        "content": "Tu es une équipe d'analystes spécialisés en Insider Trading (Swarm). Sois précis, sceptique et technique."
+                        "content": "Tu es une équipe d'analystes spécialisés en détection d'Insider Trading et de manipulation de marché (Wash Trading). Ton ton est froid, analytique et impartial."
                     },
                     {
                         "role": "user", 
-                        "content": f"Analyse : '{title}'. Volume: ${v} | Liq: ${l} | Ratio: {r:.2f}. Débats sur la probabilité d'insider trading ou de wash trading. Verdict court."
+                        "content": f"""Analyse le marché suivant : '{title}'.
+                        Données financières :
+                        - Volume total : ${v:,.2f}
+                        - Liquidité disponible : ${l:,.2f}
+                        - Ratio Volume/Liquidité : {r:.2f}
+                        
+                        Débats sur la probabilité que ce volume cache une information privilégiée ou une manipulation technique. Donne un verdict final court."""
                     }
                 ],
                 model="llama-3.3-70b-versatile", 
@@ -108,29 +114,30 @@ async def test_swarm():
             
             analysis_text = response.choices[0].message.content
             
-            # Score de confiance dynamique
-            conf = min(95, int(65 + (r * 3)))
+            # Calcul dynamique du score de confiance
+            conf_base = 70
+            conf = min(95, int(conf_base + (r * 2))) if r > 1 else conf_base
 
             results.append(SwarmResult(
                 thematique=title,
-                final_verdict="ACCUMULATION" if r > 1.2 else "FLUX NEUTRE",
+                final_verdict="ACCUMULATION / INSIDER" if r > 2 else "FLUX ORGANIQUE",
                 confidence=conf,
                 summary=analysis_text,
-                recommendation="Surveiller les flux" if r > 1.2 else "Attendre",
-                key_arguments=[f"Ratio Vol/Liq de {r:.2f}"],
-                risk_assessment="ÉLEVÉ" if r > 2 else "MODÉRÉ",
-                kelly_criterion=f"Mise {min(3, r):.1f}%" if conf > 75 else "Observer"
+                recommendation="Vérifier les flux on-chain" if r > 2 else "Attendre confirmation",
+                key_arguments=[f"Ratio asymétrique : {r:.2f}"],
+                risk_assessment="ÉLEVÉ" if r > 5 else "MODÉRÉ",
+                kelly_criterion=f"Mise {min(3.0, r):.1f}%" if conf > 80 else "Observer"
             ))
             
         except Exception as e:
-            # Ce bloc va maintenant capturer les erreurs de modèle si Groq change encore
-            print(f"⚠️ Erreur IA sur {title}: {e}")
+            print(f"⚠️ Erreur critique lors de l'appel Groq pour {title} : {e}")
             continue
 
     return results
 
-# --- TEST LOCAL ---
+# --- BLOC DE TEST ---
 if __name__ == "__main__":
+    # Test local : python test_swarm.py
     res = asyncio.run(test_swarm())
     for r in res:
-        print(f"\n✅ {r.thematique} -> {r.final_verdict}")
+        print(f"\n✅ {r.thematique} -> {r.final_verdict} ({r.confidence}%)")
