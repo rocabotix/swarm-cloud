@@ -7,117 +7,97 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from test_swarm import test_swarm
 
 # --- CONFIGURATION DE LA PAGE ---
-st.set_page_config(
-    page_title="Polymarket Insider Swarm", 
-    page_icon="🎯", 
-    layout="wide"
-)
-
-# Style CSS pour un look "Terminal"
-st.markdown("""
-    <style>
-    .stApp { background-color: #0e1117; color: #ffffff; }
-    .stButton>button { width: 100%; border-radius: 5px; height: 3.5em; background-color: #ff4b4b; color: white; font-weight: bold; }
-    </style>
-    """, unsafe_allow_html=True)
+st.set_page_config(page_title="Swarm Insider Scanner", page_icon="🚀")
 
 # --- FONCTION D'ENVOI TELEGRAM ---
-def send_telegram_alert(results):
+def send_telegram_message(message):
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     chat_id = os.getenv("TELEGRAM_CHAT_ID")
     
     if not token or not chat_id:
-        print("⚠️ [ERREUR] Variables Telegram manquantes.")
-        return
+        print("❌ DEBUG TELEGRAM: Token ou Chat ID manquant dans les variables d'environnement.")
+        return False
 
-    for res in results:
-        priority = "🚨 HAUTE PRIORITÉ" if res.confidence > 85 else "📡 SIGNAL"
-        message = (
-            f"{priority}\n━━━━━━━━━━━━━━━━━━\n"
-            f"🎯 **MARCHÉ :** {res.thematique.upper()}\n\n"
-            f"💰 **ACTION :** {res.final_verdict}\n"
-            f"📊 **CONFIANCE :** {res.confidence}%\n"
-            f"⚖️ **STRATÉGIE :** {res.kelly_criterion}\n\n"
-            f"🔎 **ANALYSE :**\n{res.summary[:400]}...\n\n"
-            f"⚠️ **RISQUE :** {res.risk_assessment}\n"
-            f"━━━━━━━━━━━━━━━━━━\n"
-            f"🔗 [Ouvrir Polymarket](https://polymarket.com/)"
-        )
-
-        try:
-            url = f"https://api.telegram.org/bot{token}/sendMessage"
-            requests.post(url, json={"chat_id": chat_id, "text": message, "parse_mode": "Markdown", "disable_web_page_preview": True}, timeout=10)
-        except Exception as e:
-            print(f"❌ [ERREUR TELEGRAM] {e}")
-
-# --- LOGIQUE DU PLANIFICATEUR (SCHEDULER) ---
-
-def autonomous_scan_job():
-    """Fonction exécutée automatiquement par le scheduler"""
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"⏰ [SYSTEM] Lancement du scan automatique à {now} (UTC)")
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    payload = {
+        "chat_id": chat_id,
+        "text": message,
+        "parse_mode": "Markdown"
+    }
     
-    # Création d'une nouvelle boucle d'événement pour le thread Background
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
     try:
-        results = loop.run_until_complete(test_swarm())
-        if results and len(results) > 0:
-            print(f"✅ [SYSTEM] {len(results)} signaux trouvés ! Envoi Telegram...")
-            send_telegram_alert(results)
+        response = requests.post(url, json=payload, timeout=10)
+        if response.status_code == 200:
+            print(f"✅ DEBUG TELEGRAM: Message envoyé avec succès à {chat_id}")
+            return True
         else:
-            print("🔍 [SYSTEM] Scan terminé : 0 anomalie détectée.")
+            print(f"❌ DEBUG TELEGRAM: Erreur {response.status_code} - {response.text}")
+            return False
     except Exception as e:
-        print(f"❌ [SYSTEM ERROR] Échec du scan auto : {e}")
-    finally:
-        loop.close()
+        print(f"⚠️ DEBUG TELEGRAM: Exception lors de l'envoi : {e}")
+        return False
 
-@st.cache_resource
-def start_scheduler():
-    """Initialise le scheduler une seule fois et le garde en mémoire"""
-    sched = BackgroundScheduler(daemon=True)
-    # 07:00 UTC = 09:00 Paris | 19:00 UTC = 21:00 Paris
-    sched.add_job(autonomous_scan_job, 'cron', hour=7, minute=0)
-    sched.add_job(autonomous_scan_job, 'cron', hour=19, minute=0)
-    sched.start()
+# --- FONCTION DE SCAN (UTILISÉE PAR LE BOUTON ET LE SCHEDULER) ---
+def run_analysis():
+    print(f"📡 [SCAN] Démarrage de l'analyse à {datetime.now()}")
+    results = asyncio.run(test_swarm())
+    
+    if results:
+        header = f"🚀 *SWARM REPORT - {datetime.now().strftime('%d/%m %H:%M')}*\n"
+        send_telegram_message(header)
+        
+        for res in results:
+            msg = (
+                f"📊 *MARCHÉ : {res.thematique}*\n"
+                f"Verdict : {res.final_verdict} ({res.confidence}%)\n"
+                f"Stratégie : {res.kelly_criterion}\n"
+                f"Note : {res.recommendation}\n"
+                f"--------------------------"
+            )
+            send_telegram_message(msg)
+        return results
+    else:
+        print("🔍 [SCAN] Aucun signal trouvé lors du scan.")
+        return []
+
+# --- PLANIFICATEUR (SCHEDULER) ---
+# S'exécute en arrière-plan
+if "scheduler_started" not in st.session_state:
+    scheduler = BackgroundScheduler(timezone="Europe/Paris")
+    # Planification à 09:00 et 21:00
+    scheduler.add_job(run_analysis, 'cron', hour='9,21', minute=0)
+    scheduler.start()
+    st.session_state.scheduler_started = True
     print("🚀 [SCHEDULER] Le planificateur est démarré (09h/21h Paris).")
-    return sched
-
-# Démarrage automatique
-scheduler_instance = start_scheduler()
 
 # --- INTERFACE STREAMLIT ---
-st.title("🎯 Swarm Insider Trading")
+st.title("🚀 Swarm Cloud Predictor")
+st.write("Analyse en temps réel des asymétries de volume sur Polymarket.")
 
-col1, col2, col3 = st.columns(3)
-with col1: st.metric("Statut", "Opérationnel", "UptimeRobot OK")
-with col2: st.metric("Prochain Scan", "09:00 / 21:00")
-with col3: st.metric("Modèle", "Llama 3.3-70B")
-
-st.divider()
-
-if st.button("🚀 LANCER UNE ANALYSE MANUELLE MAINTENANT"):
-    with st.spinner("Analyse en cours..."):
-        try:
-            results = asyncio.run(test_swarm())
-            st.session_state.last_results = results
+col1, col2 = st.columns(2)
+with col1:
+    if st.button("🚀 LANCER UNE ANALYSE MANUELLE"):
+        with st.spinner("Le Swarm analyse Polymarket..."):
+            results = run_analysis()
             if results:
-                send_telegram_alert(results)
-                st.success(f"Analyse terminée. {len(results)} signaux trouvés.")
+                st.success(f"Analyse terminée. {len(results)} signaux envoyés à Telegram.")
+                for r in results:
+                    with st.expander(f"Détails : {r.thematique}"):
+                        st.write(f"**Verdict :** {r.final_verdict}")
+                        st.write(f"**Confiance :** {r.confidence}%")
+                        st.write(f"**Analyse :** {r.summary}")
             else:
-                st.warning("Analyse terminée. 0 signaux trouvés.")
-        except Exception as e:
-            st.error(f"Erreur : {e}")
+                st.warning("Aucun signal trouvé avec les filtres actuels.")
 
-if 'last_results' in st.session_state and st.session_state.last_results:
-    st.subheader("📊 Derniers Signaux")
-    for res in st.session_state.last_results:
-        with st.expander(f"MARCHÉ : {res.thematique.upper()}", expanded=True):
-            st.write(f"**Verdict :** {res.final_verdict} ({res.confidence}%)")
-            st.write(f"**Analyse :** {res.summary}")
-            st.info(f"**Stratégie :** {res.kelly_criterion}")
-else:
-    st.info("En attente de signaux...")
+with col2:
+    st.write(f"**Heure du serveur :** {datetime.now().strftime('%H:%M:%S')}")
 
+# --- AFFICHAGE DES DERNIERS LOGS DANS L'APP ---
 st.divider()
-st.caption(f"Heure serveur actuelle : {datetime.now().strftime('%H:%M:%S')} UTC")
+st.subheader("📊 État du Système")
+st.info("Le bot scanne automatiquement à 09:00 et 21:00. Les résultats sont envoyés directement sur Telegram.")
+
+if os.getenv("TELEGRAM_BOT_TOKEN") and os.getenv("TELEGRAM_CHAT_ID"):
+    st.success("✅ Configuration Telegram détectée.")
+else:
+    st.error("❌ Configuration Telegram manquante dans les variables d'environnement Render.")
