@@ -21,85 +21,86 @@ class SwarmResult:
 
 async def test_swarm():
     """
-    Scanne les vrais marchés de Polymarket, filtre les bruits
-    et analyse les anomalies de volume via Llama 3.3.
+    Scanne Polymarket, traite les données et fait débattre le Swarm.
     """
-    
     raw_markets = []
     
-    # 1. RÉCUPÉRATION DES DONNÉES RÉELLES (Gamma API Polymarket)
+    # 1. RÉCUPÉRATION DES DONNÉES (API GAMMA)
     try:
-        # On récupère les 100 marchés les plus actifs
-        url = "https://gamma-api.polymarket.com/events?active=true&closed=false&limit=100"
+        # On cible les marchés actifs et populaires
+        url = "https://gamma-api.polymarket.com/events?active=true&closed=false&limit=50"
         response = requests.get(url, timeout=15)
-        data = response.json()
         
+        if response.status_code != 200:
+            print(f"❌ Erreur API Polymarket : Code {response.status_code}")
+            return []
+
+        data = response.json()
+        print(f"📡 [DEBUG] {len(data)} événements reçus de Polymarket.")
+
         for event in data:
-            title = event.get('title', '')
+            title = event.get('title', 'Titre inconnu')
             markets_list = event.get('markets', [])
             
             if markets_list:
-                # On prend le premier marché de l'événement (souvent le principal)
                 m = markets_list[0]
                 
-                # Extraction des métriques
-                # La liquidité est souvent représentée par 'liquidity' ou le 'groupScore'
-                volume = float(m.get('volume', 0))
-                liquidity = float(m.get('liquidity', 1)) # On évite la division par zéro
+                # Conversion sécurisée en float (l'API peut envoyer du string)
+                try:
+                    v = float(m.get('volume', 0))
+                    l = float(m.get('liquidity', 1))
+                    # On évite la division par zéro
+                    l = l if l > 0 else 1
+                    ratio = v / l
+                except:
+                    v, l, ratio = 0, 1, 0
                 
-                if volume > 500: # On ignore les micro-marchés sans intérêt
+                # On ne prend que les marchés avec un minimum d'activité
+                if v > 100:
                     raw_markets.append({
                         "title": title,
-                        "volume": volume,
-                        "liquidity": liquidity
+                        "volume": v,
+                        "liquidity": l,
+                        "ratio": ratio
                     })
+
     except Exception as e:
-        print(f"❌ Erreur API Polymarket: {e}")
+        print(f"❌ Erreur lors du fetch : {e}")
         return []
 
-    # 2. FILTRAGE ANTI-BRUIT
-    excluded_keywords = ["GTA", "BITCOIN", "BTC", "ETH", "ETHEREUM", "SOLANA", "SOL", "DOGE"]
+    # 2. FILTRAGE ET TRI
+    # On trie par volume décroissant pour être sûr d'avoir des vrais sujets
+    # On ne filtre PAS par ratio pour ce test, pour forcer l'affichage
+    raw_markets = sorted(raw_markets, key=lambda x: x['volume'], reverse=True)
     
-    filtered_markets = []
-    for m in raw_markets:
-        title_upper = m['title'].upper()
-        if not any(keyword in title_upper for keyword in excluded_keywords):
-            # Calcul du ratio
-            ratio = m['volume'] / m['liquidity'] if m['liquidity'] > 0 else 0
-            m['ratio'] = ratio
-            # On ne garde que si le ratio est suspect (> 1.5)
-            if ratio > 1.5:
-                filtered_markets.append(m)
+    # On prend les 5 premiers pour l'analyse
+    target_markets = raw_markets[:5]
 
-    # 3. TRI PAR IMPORTANCE DE L'ANOMALIE
-    # On classe les marchés du plus suspect au moins suspect
-    filtered_markets = sorted(filtered_markets, key=lambda x: x['ratio'], reverse=True)
-
-    if not filtered_markets:
-        print("🔍 Aucun signal suspect détecté sur Polymarket pour le moment.")
+    if not target_markets:
+        print("🔍 Aucun marché avec volume > 100 trouvé.")
         return []
 
     results = []
 
-    # 4. ANALYSE PAR LE SWARM (Top 3 des anomalies)
-    for market in filtered_markets[:3]:
+    # 3. ANALYSE PAR LE SWARM
+    for market in target_markets[:3]: # On analyse les 3 plus gros
         title = market['title']
-        volume = market['volume']
-        liquidity = market['liquidity']
-        vol_liq_ratio = market['ratio']
+        v = market['volume']
+        l = market['liquidity']
+        r = market['ratio']
+
+        print(f"🧠 [IA] Analyse en cours : {title} (Ratio: {r:.2f})")
 
         try:
             response = client.chat.completions.create(
                 messages=[
                     {
                         "role": "system", 
-                        "content": "Tu es une équipe d'analystes spécialisés en Insider Trading. Ton but est de déterminer si un volume élevé cache une information privée ou du bruit."
+                        "content": "Tu es une équipe d'analystes spécialisés en Insider Trading (Swarm). Sois précis et technique."
                     },
                     {
                         "role": "user", 
-                        "content": f"""Analyse : '{title}'. 
-                        Stats : Vol ${volume} | Liq ${liquidity} | Ratio : {vol_liq_ratio:.2f}.
-                        Débats entre un expert Smart Money et un sceptique. Donne un verdict final sec."""
+                        "content": f"Analyse : '{title}'. Volume: ${v} | Liq: ${l} | Ratio: {r:.2f}. Débats sur la probabilité d'insider trading ou de wash trading. Verdict court."
                     }
                 ],
                 model="llama-3.3-70b-specdec",
@@ -108,29 +109,28 @@ async def test_swarm():
             
             analysis_text = response.choices[0].message.content
             
-            # Score de confiance basé sur le ratio
-            confidence_score = min(95, int(70 + (vol_liq_ratio * 2)))
+            # Score de confiance dynamique
+            conf = min(95, int(60 + (r * 5)))
 
             results.append(SwarmResult(
                 thematique=title,
-                final_verdict="ACHAT / ACCUMULATION" if vol_liq_ratio > 2 else "FLUX À SURVEILLER",
-                confidence=confidence_score,
+                final_verdict="ACCUMULATION" if r > 1.2 else "FLUX NEUTRE",
+                confidence=conf,
                 summary=analysis_text,
-                recommendation=f"Ratio élevé de {vol_liq_ratio:.2f}. Vérifier les news.",
-                key_arguments=["Mouvement asymétrique Volume/Liquidité"],
-                risk_assessment="ÉLEVÉ" if confidence_score > 85 else "MODÉRÉ",
-                kelly_criterion=f"Miser {min(5, vol_liq_ratio):.1f}% du capital" if confidence_score > 80 else "Observer"
+                recommendation="Surveiller les carnets d'ordres" if r > 1.2 else "Attendre",
+                key_arguments=[f"Ratio Vol/Liq de {r:.2f}"],
+                risk_assessment="ÉLEVÉ" if r > 2 else "MODÉRÉ",
+                kelly_criterion=f"Mise {min(3, r):.1f}%" if conf > 75 else "Observer"
             ))
             
         except Exception as e:
-            print(f"⚠️ Erreur d'analyse IA pour {title}: {e}")
+            print(f"⚠️ Erreur IA sur {title}: {e}")
             continue
 
     return results
 
 # --- TEST LOCAL ---
 if __name__ == "__main__":
-    res_list = asyncio.run(test_swarm())
-    for r in res_list:
-        print(f"\n✅ SIGNAL DÉTECTÉ : {r.thematique}")
-        print(f"Verdict : {r.final_verdict} (Confiance: {r.confidence}%)")
+    res = asyncio.run(test_swarm())
+    for r in res:
+        print(f"\n✅ {r.thematique} -> {r.final_verdict}")
