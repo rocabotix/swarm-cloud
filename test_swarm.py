@@ -59,7 +59,7 @@ async def test_swarm():
         vol_liq_ratio = volume / liquidity
         
         # Détection d'anomalie quantitative
-        is_anomaly = vol_liq_ratio > 2.5 # Seuil arbitraire pour détecter un mouvement suspect
+        is_anomaly = vol_liq_ratio > 1.5 # Seuil arbitraire pour détecter un mouvement suspect
 
         # Prompt pour le débat des agents (Modèle mis à jour vers llama-3.3)
         try:
